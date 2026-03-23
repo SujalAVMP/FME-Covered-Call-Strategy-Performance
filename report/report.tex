@@ -1,0 +1,395 @@
+\documentclass[12pt, a4paper]{article}
+
+% ── Packages ──────────────────────────────────────────
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath, amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage{float}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage[table]{xcolor}
+\usepackage{fancyhdr}
+\usepackage{enumitem}
+
+% ── Page style ────────────────────────────────────────
+\pagestyle{fancy}
+\fancyhf{}
+\rhead{ES418 — Group 10}
+\lhead{Covered Call Strategy Performance}
+\cfoot{\thepage}
+\setlength{\headheight}{15pt}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue,
+    citecolor=blue,
+    urlcolor=blue
+}
+
+% ── Title ─────────────────────────────────────────────
+\title{
+    \textbf{Performance Analysis of the Covered Call Strategy} \\[0.5em]
+    \large ES418: Financial Modelling and Engineering \\
+    Group Project Report — Group 10
+}
+\author{
+    Pradnyesh \and Akshit \and Pratik \and Rahul \and Sujal
+}
+\date{\today}
+
+\begin{document}
+\maketitle
+\thispagestyle{empty}
+
+\begin{abstract}
+A covered call strategy involves holding a long position in a stock while simultaneously selling a call option on the same stock. This report investigates the performance of this strategy using historical data for Reliance Industries (RELIANCE.NS), Monte Carlo simulations, and sensitivity analysis. We compare the covered call with a simple buy-and-hold approach across multiple risk-adjusted metrics including the Sharpe ratio, maximum drawdown, and Value-at-Risk. In our marked-to-market backtest, the covered call lowers annualized volatility from 28.27\% to 26.08\% and improves maximum drawdown from -44.08\% to -39.93\%, while reducing annualized return from 15.39\% to 10.46\% because upside beyond the strike is surrendered.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+% ══════════════════════════════════════════════════════
+\section{Introduction}
+% ══════════════════════════════════════════════════════
+
+Options are derivative instruments that grant the holder the right, but not the obligation, to buy or sell an underlying asset at a predetermined strike price before or at expiry. Among the various strategies that combine options with the underlying, the \textbf{covered call} is one of the most widely used.
+
+A covered call consists of:
+\begin{itemize}
+    \item a \textbf{long position} in the underlying asset (e.g., a stock), and
+    \item a \textbf{short position} in a call option on the same asset.
+\end{itemize}
+
+By writing (selling) the call, the investor collects a premium upfront. In exchange, they give up any gains beyond the strike price $K$. This strategy is employed by investors who are \textbf{mildly bullish or neutral} on the underlying — they expect the stock to stay roughly where it is or rise modestly, and wish to generate additional income from the option premium.
+
+The goal of this project is to:
+\begin{enumerate}
+    \item Simulate the returns of a covered call strategy on a real stock.
+    \item Compare the results with simply holding the stock (buy-and-hold).
+    \item Analyze the risk reduction and capped upside inherent in the strategy.
+\end{enumerate}
+
+We implement the analysis in Python, using Black-Scholes pricing for option premiums, Geometric Brownian Motion for Monte Carlo simulations, and historical backtesting with data from Reliance Industries (NSE).
+
+% ══════════════════════════════════════════════════════
+\section{Theoretical Framework}
+% ══════════════════════════════════════════════════════
+
+\subsection{Covered Call Payoff}
+
+Let:
+\begin{itemize}
+    \item $S_0$ = current stock price,
+    \item $S_T$ = stock price at expiry,
+    \item $K$ = strike price of the call,
+    \item $C_0$ = premium received from selling the call.
+\end{itemize}
+
+The payoff at expiry from the long stock position is $S_T$. The payoff from the short call is $-\max(S_T - K, 0)$. Combining:
+\begin{equation}
+    \Pi_{\text{covered call}}(S_T) = S_T - \max(S_T - K, 0) = \min(S_T, K)
+\end{equation}
+
+The \textbf{profit}, accounting for the initial cost and premium received:
+\begin{equation}
+    \text{Profit}(S_T) = \min(S_T, K) + C_0 - S_0
+\end{equation}
+
+Key properties:
+\begin{itemize}
+    \item \textbf{Breakeven price}: $S_0 - C_0$ (lower than the stock-only breakeven of $S_0$).
+    \item \textbf{Maximum profit}: $(K - S_0) + C_0$, achieved when $S_T \geq K$.
+    \item \textbf{Maximum loss}: $S_0 - C_0$ (if the stock goes to zero; the premium provides a small cushion).
+\end{itemize}
+
+\subsection{Black-Scholes Option Pricing}
+
+We price the European call option using the Black-Scholes formula:
+\begin{equation}
+    C = S_0 \, N(d_1) - K \, e^{-rT} \, N(d_2)
+\end{equation}
+where:
+\begin{align}
+    d_1 &= \frac{\ln(S_0 / K) + (r + \sigma^2/2) \, T}{\sigma \sqrt{T}} \\[6pt]
+    d_2 &= d_1 - \sigma \sqrt{T}
+\end{align}
+$N(\cdot)$ is the standard normal CDF, $r$ is the risk-free rate, $\sigma$ is the annualized volatility, and $T$ is time to expiry in years.
+
+\subsection{Greeks of the Covered Call Position}
+
+The Greeks quantify the sensitivity of the position to changes in market parameters. For the covered call (long stock + short call):
+
+\begin{center}
+\small
+\begin{tabular}{p{1.7cm} p{5.2cm} p{5.0cm}}
+    \toprule
+    \textbf{Greek} & \textbf{Formula} & \textbf{Interpretation} \\
+    \midrule
+    Delta & $1 - N(d_1)$ & Reduced directional exposure (between 0 and 1) \\
+    Gamma & $-\dfrac{n(d_1)}{S \sigma \sqrt{T}}$ & Negative: position is hurt by large moves \\[8pt]
+    Theta & $+\dfrac{S \, n(d_1) \, \sigma}{2\sqrt{T}} + r K e^{-rT} N(d_2)$ & Positive: time decay benefits the position \\[8pt]
+    Vega & $-S \, n(d_1) \sqrt{T}$ & Negative: hurt by rising volatility \\
+    \bottomrule
+\end{tabular}
+\end{center}
+\normalsize
+
+Here $n(\cdot)$ denotes the standard normal PDF. The key takeaway is that the covered call has \textbf{positive theta} (profits from time decay) and \textbf{negative gamma} (harmed by large price swings in either direction).
+
+\subsection{Risk Metrics}
+
+We evaluate the strategies using:
+\begin{itemize}
+    \item \textbf{Sharpe Ratio}: $\displaystyle \text{SR} = \frac{R_p - R_f}{\sigma_p}$ — excess return per unit of risk.
+    \item \textbf{Sortino Ratio}: Same as Sharpe but uses downside deviation only.
+    \item \textbf{Maximum Drawdown}: Largest peak-to-trough decline in the equity curve.
+    \item \textbf{Value-at-Risk (VaR, 95\%)}: The loss threshold exceeded only 5\% of the time.
+    \item \textbf{Conditional VaR (CVaR)}: Expected loss given that the loss exceeds VaR.
+\end{itemize}
+
+
+% ══════════════════════════════════════════════════════
+\section{Methodology}
+% ══════════════════════════════════════════════════════
+
+\subsection{Data}
+
+We use daily dividend- and split-adjusted closing prices for \textbf{Reliance Industries (RELIANCE.NS)} from January 2020 to December 2025, obtained via the \texttt{yfinance} Python library. Reliance was chosen as a large-cap Indian equity with high liquidity.
+
+\subsection{Option Premium Estimation}
+
+Since this project does not use a directly sourced historical option-price dataset for the full sample, we compute theoretical call premiums at each rebalancing date using the Black-Scholes formula. The volatility input $\sigma$ is estimated as the 30-day rolling annualized historical volatility:
+\begin{equation}
+    \hat{\sigma}_t = \text{std}\!\left(\ln\frac{S_i}{S_{i-1}}\right)_{i=t-29}^{t} \times \sqrt{252}
+\end{equation}
+We assume a constant annual risk-free rate of $r = 7\%$ throughout the analysis. \textbf{This is an important assumption}: actual market premiums may differ from the BS theoretical value due to supply-demand dynamics, changing interest rates, and the volatility smile.
+
+\subsection{Backtesting Procedure}
+
+We implement a \textbf{rolling covered call} strategy:
+\begin{enumerate}
+    \item On day 0, buy the stock at price $S_0$.
+    \item Simultaneously sell a call with strike $K = S_0 \times (1 + \delta)$ expiring in 30 trading days, where $\delta$ is the strike offset (e.g., $+5\%$ for OTM).
+    \item At each expiry:
+    \begin{itemize}
+        \item If $S_T > K$: the call is exercised. The stock is ``called away'' at $K$. Re-purchase at market price and sell a new call.
+        \item If $S_T \leq K$: the call expires worthless. Keep the stock and sell a new call.
+    \end{itemize}
+    \item Track the portfolio value daily and compare with a buy-and-hold benchmark.
+\end{enumerate}
+
+\subsection{Monte Carlo Simulation}
+
+We simulate 10{,}000 stock price paths over the option period using Geometric Brownian Motion:
+\begin{equation}
+    S_{t+\Delta t} = S_t \cdot \exp\!\left[\left(\mu - \tfrac{\sigma^2}{2}\right)\Delta t + \sigma \sqrt{\Delta t} \, Z\right], \quad Z \sim \mathcal{N}(0,1)
+\end{equation}
+where $\mu$ is the estimated annualized drift from historical data, $\sigma$ is the historical volatility, and $\Delta t = 1/252$. For each path, we compute the covered call return and compare with the stock-only return to build a distribution of outcomes.
+
+\subsection{Sensitivity Analysis}
+
+We systematically vary:
+\begin{itemize}
+    \item \textbf{Strike offset} from $-10\%$ (deep ITM) to $+15\%$ (far OTM).
+    \item \textbf{Days to expiry} from 7 to 90 days.
+\end{itemize}
+For each combination, we run Monte Carlo simulations and compute an annualized Sharpe ratio to construct a moneyness-expiry heatmap.
+
+
+% ══════════════════════════════════════════════════════
+\section{Results}
+% ══════════════════════════════════════════════════════
+
+\subsection{Payoff and Profit Diagrams}
+
+Figure~\ref{fig:payoff} shows the theoretical payoff and profit diagrams for the covered call. The payoff is capped at $K$ for any $S_T > K$, while the profit diagram shows the premium-adjusted curve with the lower breakeven at $S_0 - C_0$.
+
+\begin{figure}[H]
+    \centering
+    \begin{subfigure}[b]{0.48\textwidth}
+        \includegraphics[width=\textwidth]{output/figures/payoff_diagram.png}
+        \caption{Payoff at expiry}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[b]{0.48\textwidth}
+        \includegraphics[width=\textwidth]{output/figures/profit_diagram.png}
+        \caption{Profit/loss at expiry}
+    \end{subfigure}
+    \caption{Covered call payoff and profit diagrams for RELIANCE.NS.}
+    \label{fig:payoff}
+\end{figure}
+
+\subsection{Historical Backtest}
+
+Figure~\ref{fig:equity} shows the equity curves for the covered call vs.\ buy-and-hold over the backtest period. Table~\ref{tab:metrics} summarizes the risk-adjusted performance metrics.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.85\textwidth]{output/figures/equity_curves.png}
+    \caption{Historical equity curves — covered call vs.\ buy-and-hold (log scale).}
+    \label{fig:equity}
+\end{figure}
+
+\begin{table}[H]
+    \centering
+    \caption{Performance metrics comparison.}
+    \label{tab:metrics}
+    \input{output/tables/performance_metrics.tex}
+\end{table}
+
+The marked-to-market backtest shows the intended trade-off clearly: the covered call earns lower annualized return than buy-and-hold, but it also posts lower volatility and a shallower maximum drawdown. The premium income cushions declines, while repeated assignment during rallies limits participation once the stock moves materially beyond the strike price.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.85\textwidth]{output/figures/drawdown.png}
+    \caption{Drawdown from peak — covered call vs.\ stock only.}
+    \label{fig:drawdown}
+\end{figure}
+
+\subsection{Monte Carlo Simulation Results}
+
+Figure~\ref{fig:mc} shows the distribution of terminal returns from 10{,}000 simulated paths.
+
+\begin{figure}[H]
+    \centering
+    \begin{subfigure}[b]{0.48\textwidth}
+        \includegraphics[width=\textwidth]{output/figures/mc_fan_chart.png}
+        \caption{Fan chart (percentile bands)}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[b]{0.48\textwidth}
+        \includegraphics[width=\textwidth]{output/figures/return_distribution.png}
+        \caption{Return distributions}
+    \end{subfigure}
+    \caption{Monte Carlo simulation results.}
+    \label{fig:mc}
+\end{figure}
+
+The covered call distribution has:
+\begin{itemize}
+    \item A \textbf{narrower spread} (lower standard deviation).
+    \item The upside is \textbf{truncated} at the cap imposed by $K$.
+    \item The mean is \textbf{shifted} due to the premium income.
+\end{itemize}
+
+\subsection{Sensitivity Analysis}
+
+Figure~\ref{fig:heatmap} shows the Sharpe ratio across different strike offsets and expiry periods. In our runs, the strongest combinations appear for short-dated calls, especially around ATM to 5\% OTM strikes. Moderate 21--60 day expiries at 2--5\% OTM also perform well, balancing premium income against upside participation.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.75\textwidth]{output/figures/heatmap.png}
+    \caption{Sharpe ratio heatmap — strike offset vs.\ days to expiry.}
+    \label{fig:heatmap}
+\end{figure}
+
+\subsection{Greeks Analysis}
+
+Figure~\ref{fig:greeks} plots the covered call position's delta, gamma, and theta as the stock price varies around the strike.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.9\textwidth]{output/figures/greeks.png}
+    \caption{Covered call Greeks vs.\ stock price.}
+    \label{fig:greeks}
+\end{figure}
+
+Observations:
+\begin{itemize}
+    \item \textbf{Delta} decreases as $S$ increases past $K$ — the position becomes less sensitive to further stock appreciation (upside is already capped).
+    \item \textbf{Gamma} is negative throughout, peaking near $K$ — the position is most vulnerable to sudden large moves when the stock is near the strike.
+    \item \textbf{Theta} is positive — the position benefits from the passage of time, as the sold call loses value through time decay.
+\end{itemize}
+
+
+% ══════════════════════════════════════════════════════
+\section{Discussion and Interpretation}
+% ══════════════════════════════════════════════════════
+
+\subsection{When Does the Covered Call Outperform?}
+
+The covered call tends to outperform buy-and-hold in:
+\begin{itemize}
+    \item \textbf{Flat or sideways markets}: The stock doesn't move much, and the premium income adds to returns that would otherwise be near zero.
+    \item \textbf{High-volatility environments}: Higher volatility leads to higher option premiums, so the income from selling calls is greater.
+    \item \textbf{Mildly declining markets}: The premium cushion reduces losses compared to holding the stock outright.
+\end{itemize}
+
+\subsection{When Does It Underperform?}
+
+\begin{itemize}
+    \item \textbf{Strong bull markets}: The stock price surges past $K$, and the covered call participates in none of the upside beyond $K$. The opportunity cost can be significant.
+    \item \textbf{Severe crashes}: While the premium provides a small cushion, the long stock position still bears the full brunt of a major decline. The downside protection is limited.
+\end{itemize}
+
+\subsection{Suitable Trader Profiles}
+
+The covered call is suitable for:
+\begin{itemize}
+    \item \textbf{Income-seeking investors} who want to generate cash flow from their stock holdings.
+    \item \textbf{Mildly bullish or neutral investors} who believe the stock will not rally significantly.
+    \item \textbf{Portfolio managers} aiming to reduce the volatility of their equity positions.
+\end{itemize}
+
+\subsection{Comparison with the Protective Put}
+
+While the covered call \emph{caps the upside} and provides income, the protective put (long stock + long put) \emph{floors the downside} at a cost. They address opposite concerns:
+\begin{center}
+\begin{tabular}{lcc}
+    \toprule
+     & \textbf{Covered Call} & \textbf{Protective Put} \\
+    \midrule
+    Upside & Capped at $K$ & Unlimited \\
+    Downside & Full exposure (small cushion) & Floored at $K$ \\
+    Net premium & Receives $C_0$ & Pays $P_0$ \\
+    Market view & Neutral to mildly bullish & Bullish but hedging \\
+    \bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Limitations}
+
+\begin{enumerate}
+    \item \textbf{BS-estimated premiums}: Actual market option premiums differ from theoretical values due to supply-demand effects and the volatility smile.
+    \item \textbf{No transaction costs}: We do not model brokerage, bid-ask spreads, or slippage, which would erode returns especially with frequent rolling.
+    \item \textbf{European option assumption}: The analysis models European-style calls, which matches the contract style used for NSE stock options; however, the BS model still assumes constant volatility and log-normal returns.
+    \item \textbf{Dividend treatment}: The stock-price history is dividend-adjusted, but we do not include an explicit dividend yield in Black-Scholes pricing or separate dividend cash flows in the strategy.
+\end{enumerate}
+
+
+% ══════════════════════════════════════════════════════
+\section{Conclusion}
+% ══════════════════════════════════════════════════════
+
+The covered call strategy systematically exchanges upside potential for immediate premium income and reduced portfolio volatility. Our analysis using historical backtesting, Monte Carlo simulation, and sensitivity analysis on Reliance Industries confirms that:
+\begin{itemize}
+    \item The strategy lowers annualized volatility from 28.27\% to 26.08\% and improves maximum drawdown from -44.08\% to -39.93\% versus buy-and-hold.
+    \item The price of that risk reduction is lower annualized return: 10.46\% for the covered call versus 15.39\% for the stock-only benchmark.
+    \item The covered call is not a ``free lunch'' — it underperforms in strong rallies and provides only limited protection in crashes.
+    \item It is best suited for mildly bullish or neutral investors seeking income generation.
+\end{itemize}
+
+The accompanying Streamlit application allows users to explore the strategy with custom parameters and real-time data.
+
+
+% ══════════════════════════════════════════════════════
+\section*{References}
+% ══════════════════════════════════════════════════════
+
+\begin{enumerate}[label={[\arabic*]}]
+    \item Hull, J.C. \textit{Options, Futures, and Other Derivatives}. Pearson, 11th edition.
+    \item ES418 Lecture 5: Options/Strategies. IIT Gandhinagar.
+    \item ES418 Lecture 3: Options. IIT Gandhinagar.
+    \item ES418 Lecture 6: Binomial Replication. IIT Gandhinagar.
+    \item CBOE. \textit{CBOE S\&P 500 BuyWrite Index (BXM) Methodology}.
+    \item Black, F. and Scholes, M. (1973). ``The Pricing of Options and Corporate Liabilities.'' \textit{Journal of Political Economy}, 81(3), 637--654.
+    \item National Stock Exchange of India. \textit{Individual Securities F\&O: Contract Specifications for Stock Options}. Updated October 28, 2025.
+    \item Securities and Exchange Board of India (SEBI), Circular No.\ CIR/DNPD/6/2010, ``European Style Stock Options'', October 27, 2010.
+\end{enumerate}
+
+\vspace{1em}
+\noindent\textbf{Code and App:} The complete source code and Streamlit application are included in the submitted project folder.
+
+\end{document}
