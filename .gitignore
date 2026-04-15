@@ -17,3 +17,4 @@ report/*.synctex.gz
 report/*.toc
 
 .DS_Store
+.vscode/

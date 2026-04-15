@@ -325,6 +325,309 @@ def plotly_return_dist(cc_returns, stock_returns,
     return fig
 
 
+# ──────────────────────────────────────────────────────
+#  11. Cross-sectional: Beta vs Covered Call Alpha
+# ──────────────────────────────────────────────────────
+def plot_beta_vs_alpha(combined_df, save_path=None):
+    """Scatter of beta (x) vs covered-call alpha (y), colored by sector.
+
+    `combined_df` must have columns [ticker, sector, beta, alpha_cc].
+    """
+    df = combined_df.dropna(subset=["beta", "alpha_cc"]).copy()
+    fig, ax = plt.subplots(figsize=(9, 6))
+
+    sectors = sorted(df["sector"].unique())
+    cmap = plt.get_cmap("tab10")
+    for i, sector in enumerate(sectors):
+        sub = df[df["sector"] == sector]
+        ax.scatter(sub["beta"], sub["alpha_cc"], s=120, alpha=0.8,
+                   color=cmap(i % 10), label=sector, edgecolor="black", linewidth=0.5)
+        for _, row in sub.iterrows():
+            ax.annotate(row["ticker"].replace(".NS", ""),
+                        (row["beta"], row["alpha_cc"]),
+                        textcoords="offset points", xytext=(6, 4), fontsize=8)
+
+    # OLS trend line
+    if len(df) >= 2:
+        slope, intercept = np.polyfit(df["beta"], df["alpha_cc"], 1)
+        x_line = np.linspace(df["beta"].min(), df["beta"].max(), 100)
+        ax.plot(x_line, slope * x_line + intercept, "k--", alpha=0.6,
+                label=f"OLS: slope={slope:+.3f}")
+
+    ax.axhline(0, color="gray", linewidth=0.8)
+    ax.set_xlabel("Beta vs Nifty 50")
+    ax.set_ylabel("Covered Call Alpha (CC Total Return − Stock Total Return)")
+    ax.set_title("Where the Covered Call Wins: Beta vs Alpha")
+    ax.yaxis.set_major_formatter(mticker.PercentFormatter(1.0))
+    ax.legend(loc="best", fontsize=8)
+    ax.grid(True, alpha=0.3)
+    plt.tight_layout()
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+    return fig
+
+
+# ──────────────────────────────────────────────────────
+#  12. Cross-sectional: Sector × Tenure Heatmap
+# ──────────────────────────────────────────────────────
+def plot_sector_tenure_heatmap(slice_df, save_path=None, title=None):
+    """Heatmap of mean alpha_cc by (sector, period_label).
+
+    `slice_df` is the long-format output of multi_ticker_backtest.slice_by_tenure.
+    """
+    if slice_df.empty:
+        fig, ax = plt.subplots(figsize=(8, 4))
+        ax.text(0.5, 0.5, "No data", ha="center", va="center")
+        return fig
+
+    pivot = (slice_df.groupby(["sector", "period_label"])["alpha_cc"]
+             .mean()
+             .unstack("period_label"))
+
+    fig, ax = plt.subplots(figsize=(max(8, 0.8 * len(pivot.columns) + 4), 5))
+    sns.heatmap(pivot, annot=True, fmt=".1%", cmap="RdYlGn", center=0,
+                cbar_kws={"label": "Mean Covered Call Alpha"}, ax=ax)
+    ax.set_xlabel("Period")
+    ax.set_ylabel("Sector")
+    ax.set_title(title or "Sector × Tenure: Covered Call Alpha")
+    plt.tight_layout()
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+    return fig
+
+
+# ──────────────────────────────────────────────────────
+#  13. Cross-sectional: Alpha by Market Regime
+# ──────────────────────────────────────────────────────
+def plot_alpha_by_regime(slice_df, save_path=None):
+    """Bar chart of mean alpha_cc by regime, with std error bars across stocks."""
+    if slice_df.empty:
+        fig, ax = plt.subplots(figsize=(7, 4))
+        ax.text(0.5, 0.5, "No data", ha="center", va="center")
+        return fig
+
+    # Extract regime label from "2022 (Bear)" etc.
+    df = slice_df.copy()
+    df["regime"] = df["period_label"].str.extract(r"\((\w+)\)")
+    df = df.dropna(subset=["regime"])
+    if df.empty:
+        fig, ax = plt.subplots(figsize=(7, 4))
+        ax.text(0.5, 0.5, "No regime labels found", ha="center", va="center")
+        return fig
+
+    regime_order = ["Bull", "Sideways", "Bear"]
+    grouped = df.groupby("regime")["alpha_cc"].agg(["mean", "std", "count"])
+    grouped = grouped.reindex([r for r in regime_order if r in grouped.index])
+
+    colors = {"Bull": "#2ca02c", "Sideways": "#7f7f7f", "Bear": "#d62728"}
+    fig, ax = plt.subplots(figsize=(8, 5))
+    bars = ax.bar(grouped.index, grouped["mean"],
+                  yerr=grouped["std"].fillna(0), capsize=8,
+                  color=[colors.get(r, "gray") for r in grouped.index],
+                  edgecolor="black")
+    for bar, n in zip(bars, grouped["count"]):
+        height = bar.get_height()
+        ax.annotate(f"n={int(n)}", (bar.get_x() + bar.get_width() / 2, height),
+                    ha="center", va="bottom" if height >= 0 else "top", fontsize=9)
+    ax.axhline(0, color="black", linewidth=0.8)
+    ax.set_ylabel("Mean Covered Call Alpha")
+    ax.set_title("Covered Call Performance by Market Regime")
+    ax.yaxis.set_major_formatter(mticker.PercentFormatter(1.0))
+    ax.grid(True, alpha=0.3, axis="y")
+    plt.tight_layout()
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+    return fig
+
+
+# ──────────────────────────────────────────────────────
+#  14. Cross-sectional: Rolling Alpha Time Series
+# ──────────────────────────────────────────────────────
+def plot_rolling_alpha_timeseries(slice_df, save_path=None):
+    """Time series of sector-mean alpha across rolling windows."""
+    if slice_df.empty:
+        fig, ax = plt.subplots(figsize=(10, 4))
+        ax.text(0.5, 0.5, "No data", ha="center", va="center")
+        return fig
+
+    df = slice_df.copy()
+    grouped = df.groupby(["sector", "period_label", "period_start"])["alpha_cc"].mean().reset_index()
+    grouped = grouped.sort_values("period_start")
+
+    fig, ax = plt.subplots(figsize=(11, 5))
+    cmap = plt.get_cmap("tab10")
+    for i, (sector, sub) in enumerate(grouped.groupby("sector")):
+        ax.plot(sub["period_start"], sub["alpha_cc"], "-o", label=sector,
+                alpha=0.85, color=cmap(i % 10), markersize=4)
+    ax.axhline(0, color="black", linewidth=0.8)
+    ax.set_xlabel("Window Start")
+    ax.set_ylabel("Sector Mean Covered Call Alpha")
+    ax.set_title("Rolling-Window Covered Call Alpha by Sector")
+    ax.yaxis.set_major_formatter(mticker.PercentFormatter(1.0))
+    ax.legend(loc="best", fontsize=8, ncol=2)
+    ax.grid(True, alpha=0.3)
+    plt.tight_layout()
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+    return fig
+
+
+# ──────────────────────────────────────────────────────
+#  15. Validation: BS price vs Market price
+# ──────────────────────────────────────────────────────
+def plot_bs_vs_market(validation_df, save_path=None):
+    """Scatter of BS theoretical vs market price for current option chain."""
+    df = validation_df
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+
+    ax = axes[0]
+    ax.scatter(df["market_price"], df["bs_price"], s=80, alpha=0.7,
+               edgecolor="black", linewidth=0.5)
+    lo = min(df["market_price"].min(), df["bs_price"].min()) * 0.95
+    hi = max(df["market_price"].max(), df["bs_price"].max()) * 1.05
+    ax.plot([lo, hi], [lo, hi], "k--", alpha=0.5, label="y = x")
+    ax.set_xlabel("Market Price")
+    ax.set_ylabel("Black-Scholes Price")
+    title_meta = ""
+    if "ticker" in df.attrs:
+        title_meta = f" — {df.attrs['ticker']} ({df.attrs.get('expiry', '')})"
+    ax.set_title(f"BS vs Market Call Prices{title_meta}")
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+
+    ax = axes[1]
+    residuals = df["bs_price"] - df["market_price"]
+    ax.bar(df["strike"], residuals, color=["green" if r > 0 else "red" for r in residuals],
+           alpha=0.7, edgecolor="black")
+    ax.axhline(0, color="black", linewidth=0.8)
+    ax.set_xlabel("Strike")
+    ax.set_ylabel("BS − Market")
+    ax.set_title("Pricing Residuals")
+    ax.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+    return fig
+
+
+# ──────────────────────────────────────────────────────
+#  Plotly versions of cross-sectional plots (Streamlit)
+# ──────────────────────────────────────────────────────
+def plotly_beta_vs_alpha(combined_df):
+    import plotly.express as px
+    df = combined_df.dropna(subset=["beta", "alpha_cc"]).copy()
+    df["ticker_short"] = df["ticker"].str.replace(".NS", "", regex=False)
+    fig = px.scatter(df, x="beta", y="alpha_cc", color="sector", text="ticker_short",
+                     hover_data=["ticker", "cc_total_return", "stock_total_return"],
+                     title="Beta vs Covered Call Alpha")
+    if len(df) >= 2:
+        slope, intercept = np.polyfit(df["beta"], df["alpha_cc"], 1)
+        x_line = np.linspace(df["beta"].min(), df["beta"].max(), 100)
+        fig.add_trace(go.Scatter(x=x_line, y=slope * x_line + intercept,
+                                 mode="lines", name=f"OLS slope={slope:+.3f}",
+                                 line=dict(dash="dash", color="black")))
+    fig.update_traces(textposition="top center", marker=dict(size=12, line=dict(width=1, color="black")))
+    fig.update_layout(xaxis_title="Beta vs Nifty 50",
+                      yaxis_title="Covered Call Alpha",
+                      yaxis_tickformat=".0%",
+                      template="plotly_white")
+    fig.add_hline(y=0, line_color="gray", line_width=0.8)
+    return fig
+
+
+def plotly_sector_tenure_heatmap(slice_df, title="Sector × Tenure: Covered Call Alpha"):
+    import plotly.express as px
+    if slice_df.empty:
+        return go.Figure()
+    pivot = (slice_df.groupby(["sector", "period_label"])["alpha_cc"]
+             .mean()
+             .unstack("period_label"))
+    fig = px.imshow(pivot, text_auto=".1%", color_continuous_scale="RdYlGn",
+                    color_continuous_midpoint=0,
+                    labels=dict(color="Alpha"))
+    fig.update_layout(title=title, xaxis_title="Period", yaxis_title="Sector",
+                      template="plotly_white")
+    return fig
+
+
+def plotly_alpha_by_regime(slice_df):
+    if slice_df.empty:
+        return go.Figure()
+    df = slice_df.copy()
+    df["regime"] = df["period_label"].str.extract(r"\((\w+)\)")
+    df = df.dropna(subset=["regime"])
+    if df.empty:
+        return go.Figure()
+    regime_order = ["Bull", "Sideways", "Bear"]
+    grouped = df.groupby("regime")["alpha_cc"].agg(["mean", "std", "count"])
+    grouped = grouped.reindex([r for r in regime_order if r in grouped.index]).reset_index()
+
+    colors = {"Bull": "#2ca02c", "Sideways": "#7f7f7f", "Bear": "#d62728"}
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=grouped["regime"],
+        y=grouped["mean"],
+        error_y=dict(type="data", array=grouped["std"].fillna(0)),
+        marker_color=[colors.get(r, "gray") for r in grouped["regime"]],
+        text=[f"n={int(n)}" for n in grouped["count"]],
+        textposition="outside",
+    ))
+    fig.add_hline(y=0, line_color="black", line_width=0.8)
+    fig.update_layout(title="Covered Call Performance by Market Regime",
+                      yaxis_title="Mean Covered Call Alpha",
+                      yaxis_tickformat=".0%",
+                      template="plotly_white")
+    return fig
+
+
+def plotly_rolling_alpha_timeseries(slice_df):
+    if slice_df.empty:
+        return go.Figure()
+    df = slice_df.copy()
+    grouped = df.groupby(["sector", "period_label", "period_start"])["alpha_cc"].mean().reset_index()
+    grouped = grouped.sort_values("period_start")
+
+    fig = go.Figure()
+    for sector, sub in grouped.groupby("sector"):
+        fig.add_trace(go.Scatter(x=sub["period_start"], y=sub["alpha_cc"],
+                                 mode="lines+markers", name=sector))
+    fig.add_hline(y=0, line_color="black", line_width=0.8)
+    fig.update_layout(title="Rolling-Window Covered Call Alpha by Sector",
+                      xaxis_title="Window Start",
+                      yaxis_title="Sector Mean Alpha",
+                      yaxis_tickformat=".0%",
+                      template="plotly_white")
+    return fig
+
+
+def plotly_bs_vs_market(validation_df):
+    df = validation_df
+    fig = make_subplots(rows=1, cols=2, subplot_titles=("BS vs Market", "Residuals"))
+
+    fig.add_trace(go.Scatter(x=df["market_price"], y=df["bs_price"],
+                             mode="markers", marker=dict(size=10),
+                             name="Strikes"), row=1, col=1)
+    lo = min(df["market_price"].min(), df["bs_price"].min()) * 0.95
+    hi = max(df["market_price"].max(), df["bs_price"].max()) * 1.05
+    fig.add_trace(go.Scatter(x=[lo, hi], y=[lo, hi], mode="lines",
+                             line=dict(dash="dash", color="black"),
+                             name="y = x"), row=1, col=1)
+
+    residuals = df["bs_price"] - df["market_price"]
+    colors = ["green" if r > 0 else "red" for r in residuals]
+    fig.add_trace(go.Bar(x=df["strike"], y=residuals, marker_color=colors,
+                         name="BS − Market"), row=1, col=2)
+
+    fig.update_xaxes(title_text="Market Price", row=1, col=1)
+    fig.update_yaxes(title_text="Black-Scholes Price", row=1, col=1)
+    fig.update_xaxes(title_text="Strike", row=1, col=2)
+    fig.update_yaxes(title_text="BS − Market", row=1, col=2)
+    fig.update_layout(template="plotly_white", showlegend=False,
+                      title=f"BS vs Market — {df.attrs.get('ticker', '')} {df.attrs.get('expiry', '')}")
+    return fig
+
+
 def plotly_mc_fan(paths, title="Monte Carlo Simulation"):
     t = np.arange(paths.shape[0])
     p5  = np.percentile(paths, 5, axis=1)

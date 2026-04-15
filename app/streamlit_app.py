@@ -29,7 +29,12 @@ from src.backtest import run_backtest, compute_monthly_returns, prepare_volatili
 from src.risk_metrics import summary_table
 from src.sensitivity import strike_sensitivity, moneyness_expiry_heatmap
 from src.visualizations import (plotly_payoff, plotly_equity_curves,
-                                plotly_return_dist, plotly_mc_fan)
+                                plotly_return_dist, plotly_mc_fan,
+                                plotly_beta_vs_alpha, plotly_sector_tenure_heatmap,
+                                plotly_alpha_by_regime, plotly_rolling_alpha_timeseries,
+                                plotly_bs_vs_market)
+from src.universe import SECTOR_UNIVERSE, BENCHMARK_TICKER, tickers_in_sectors
+from src import multi_ticker_backtest, beta_analysis, tenure_slicers, market_validation
 
 
 st.set_page_config(page_title="Covered Call Analyzer", layout="wide")
@@ -76,7 +81,17 @@ mc_paths = st.sidebar.slider("Monte Carlo Paths", 1000, 20000, 5000, step=1000)
 
 run = st.sidebar.button("Run Analysis", type="primary")
 
-if not run:
+# Persist "have we run yet" across reruns triggered by other buttons (e.g. tab 5).
+if "has_run" not in st.session_state:
+    st.session_state.has_run = False
+if "xs_run" not in st.session_state:
+    st.session_state.xs_run = False
+if run:
+    st.session_state.has_run = True
+    # New parameters → invalidate previous cross-sectional output.
+    st.session_state.xs_run = False
+
+if not st.session_state.has_run:
     st.info("Set your parameters in the sidebar and click **Run Analysis**.")
     st.stop()
 
@@ -99,8 +114,9 @@ T = expiry_days / config.TRADING_DAYS
 C_0 = bs_call_price(S_0, K, T, config.RISK_FREE_RATE, sigma)
 
 # ─── Tabs ──────────────────────────────────────────────
-tab1, tab2, tab3, tab4 = st.tabs([
-    "Payoff Analysis", "Historical Backtest", "Monte Carlo", "Sensitivity & Greeks"
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    "Payoff Analysis", "Historical Backtest", "Monte Carlo",
+    "Sensitivity & Greeks", "Cross-Sectional Analysis"
 ])
 
 # ═══ Tab 1: Payoff ═══════════════════════════════════
@@ -233,3 +249,159 @@ with tab4:
                                     mode='lines', line=dict(color='green')))
         fig_t.update_layout(title="Theta", xaxis_title="Stock Price", template="plotly_white")
         st.plotly_chart(fig_t, use_container_width=True)
+
+
+# ═══ Tab 5: Cross-Sectional Analysis ══════════════════
+with tab5:
+    st.header("Cross-Sectional Analysis")
+    st.caption(
+        "Run the rolling covered-call backtest across multiple stocks and sectors, "
+        "compute beta vs Nifty 50, and find the regimes where the strategy actually beats stock-only."
+    )
+
+    all_sectors = list(SECTOR_UNIVERSE.keys())
+    selected_sectors = st.multiselect(
+        "Sectors to include",
+        options=all_sectors,
+        default=all_sectors,
+        help="Each sector contributes 2-3 large-cap NSE stocks.",
+    )
+
+    slicer_choice = st.radio(
+        "Tenure slicing",
+        options=["Calendar Year", "Market Regime", "Rolling 6mo"],
+        horizontal=True,
+        help=(
+            "Calendar Year: one bucket per year. "
+            "Market Regime: classifies each year as Bull / Sideways / Bear from Nifty's annual return. "
+            "Rolling 6mo: 6-month windows stepped every 3 months."
+        ),
+    )
+
+    run_xs_btn = st.button("Run cross-sectional analysis", type="primary", key="run_xs")
+    if run_xs_btn:
+        st.session_state.xs_run = True
+
+    if not st.session_state.xs_run:
+        st.info(
+            "Click **Run cross-sectional analysis** to download data for the selected universe "
+            "and run the backtest. This is slower than the single-ticker analysis above (~30s)."
+        )
+    else:
+        tickers = tickers_in_sectors(selected_sectors)
+        if not tickers:
+            st.error("Please select at least one sector.")
+            st.stop()
+
+        @st.cache_data(show_spinner=False)
+        def _cached_universe_backtest(tickers_tuple, start, end, strike_offset, expiry_days):
+            return multi_ticker_backtest.run_universe_backtest(
+                list(tickers_tuple), start=start, end=end,
+                strike_offset=strike_offset, expiry_days=expiry_days,
+            )
+
+        @st.cache_data(show_spinner=False)
+        def _cached_beta_table(tickers_tuple, start, end):
+            return beta_analysis.compute_beta_table(list(tickers_tuple), start=start, end=end)
+
+        @st.cache_data(show_spinner=False)
+        def _cached_nifty(start, end):
+            from src.data_fetcher import get_stock_data
+            return get_stock_data(BENCHMARK_TICKER, start, end)["Close"]
+
+        with st.spinner(f"Running backtest on {len(tickers)} tickers..."):
+            results = _cached_universe_backtest(
+                tuple(tickers), str(start_date), str(end_date),
+                strike_offset, expiry_days,
+            )
+        if not results:
+            st.error("All tickers failed. Check your network connection.")
+            st.stop()
+        st.success(f"Completed {len(results)}/{len(tickers)} tickers.")
+
+        with st.spinner("Computing beta vs Nifty 50..."):
+            beta_table = _cached_beta_table(tuple(tickers), str(start_date), str(end_date))
+
+        alpha_table = multi_ticker_backtest.compute_alpha_table(results)
+
+        # Combine alpha + beta tables
+        combined = alpha_table.merge(
+            beta_table[["ticker", "beta", "alpha_capm", "r_squared"]],
+            on="ticker", how="left"
+        )
+
+        # ── Display tables ──
+        st.subheader("Per-Ticker Summary")
+        display_cols = ["ticker", "sector", "beta", "cc_total_return",
+                        "stock_total_return", "alpha_cc", "cc_sharpe", "stock_sharpe", "win"]
+        display_df = combined[display_cols].copy()
+        for c in ["cc_total_return", "stock_total_return", "alpha_cc"]:
+            display_df[c] = display_df[c].map(lambda v: f"{v:.1%}" if pd.notna(v) else "—")
+        for c in ["beta", "cc_sharpe", "stock_sharpe"]:
+            display_df[c] = display_df[c].map(lambda v: f"{v:.3f}" if pd.notna(v) else "—")
+        st.dataframe(display_df, use_container_width=True)
+
+        n_wins = int(combined["win"].sum())
+        st.metric("Stocks where Covered Call beat Stock-Only",
+                  f"{n_wins} / {len(combined)}")
+
+        # ── Beta vs Alpha scatter ──
+        st.subheader("Beta vs Covered Call Alpha")
+        st.caption(
+            "The headline chart for the professor's question. A negative slope means "
+            "low-beta stocks favor the covered call (premium income dominates capped upside)."
+        )
+        fig_ba = plotly_beta_vs_alpha(combined)
+        st.plotly_chart(fig_ba, use_container_width=True)
+
+        # ── Tenure analysis ──
+        st.subheader("Tenure Analysis")
+
+        if slicer_choice == "Calendar Year":
+            buckets = tenure_slicers.slice_by_calendar_year(next(iter(results.values())))
+        elif slicer_choice == "Market Regime":
+            with st.spinner("Downloading Nifty for regime classification..."):
+                nifty_close = _cached_nifty(str(start_date), str(end_date))
+            buckets = tenure_slicers.slice_by_market_regime(
+                next(iter(results.values())), nifty_close
+            )
+        else:  # Rolling 6mo
+            buckets = tenure_slicers.slice_by_rolling_window(
+                next(iter(results.values())), window_months=6, step_months=3
+            )
+
+        slice_df = multi_ticker_backtest.slice_by_tenure(results, buckets)
+
+        if slice_df.empty:
+            st.warning("No data in the selected windows.")
+        else:
+            fig_hm = plotly_sector_tenure_heatmap(
+                slice_df, title=f"Sector × {slicer_choice}: Mean Covered Call Alpha"
+            )
+            st.plotly_chart(fig_hm, use_container_width=True)
+
+            if slicer_choice == "Market Regime":
+                fig_reg = plotly_alpha_by_regime(slice_df)
+                st.plotly_chart(fig_reg, use_container_width=True)
+            elif slicer_choice == "Rolling 6mo":
+                fig_roll = plotly_rolling_alpha_timeseries(slice_df)
+                st.plotly_chart(fig_roll, use_container_width=True)
+
+        # ── BS validation ──
+        with st.expander("Black-Scholes pricing validation (current option chain)", expanded=False):
+            st.caption(
+                "Compares BS theoretical prices against the current NSE option chain "
+                "for the selected single-ticker (top of sidebar). yfinance does not provide "
+                "historical option prices, so this is a snapshot validation only."
+            )
+            try:
+                with st.spinner(f"Fetching current option chain for {ticker}..."):
+                    val_df = market_validation.validate_bs_against_market(ticker)
+                fig_val = plotly_bs_vs_market(val_df)
+                st.plotly_chart(fig_val, use_container_width=True)
+                mean_pct_err = val_df["pct_error"].mean()
+                st.metric("Mean absolute pricing error",
+                          f"{mean_pct_err:.1%}" if pd.notna(mean_pct_err) else "—")
+                st.dataframe(val_df.round(2), use_container_width=True)
+            except Exception as exc:
+                st.warning(f"Validation skipped: {exc}")
