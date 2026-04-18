@@ -221,7 +221,7 @@ def main():
         alpha_table = multi_ticker_backtest.compute_alpha_table(results_dict)
         beta_table = beta_analysis.compute_beta_table(universe)
         combined = alpha_table.merge(
-            beta_table[["ticker", "beta", "alpha_capm", "r_squared"]],
+            beta_table[["ticker", "beta", "alpha_jensen", "r_squared"]],
             on="ticker", how="left"
         )
 

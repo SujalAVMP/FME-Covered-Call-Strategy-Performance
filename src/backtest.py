@@ -6,21 +6,26 @@ import pandas as pd
 from . import config
 from .black_scholes import bs_call_price
 from .data_fetcher import get_stock_data, compute_historical_volatility
+from .option_time import trading_days_to_year_fraction
 
 
 def prepare_volatility_series(prices, window):
-    """Return a fully populated annualized volatility series."""
+    """Return a fully populated annualized volatility series.
+
+    The rolling estimate is used whenever it is available. Before the rolling
+    window is fully populated, we fall back to an expanding realized-vol
+    estimate that only uses information available up to that date, and finally
+    to a fixed initial assumption on the first observation(s).
+    """
     hist_vol = compute_historical_volatility(prices, window=window)
-    hist_vol = hist_vol.where(hist_vol > 0)
+    hist_vol = hist_vol.where(np.isfinite(hist_vol) & (hist_vol >= 0))
 
-    if hist_vol.dropna().empty:
-        log_returns = np.log(prices / prices.shift(1)).dropna()
-        fallback = log_returns.std() * np.sqrt(config.TRADING_DAYS) if not log_returns.empty else 0.20
-        if not np.isfinite(fallback) or fallback <= 0:
-            fallback = 0.20
-        return pd.Series(fallback, index=prices.index, dtype=float)
+    log_returns = np.log(prices / prices.shift(1))
+    expanding_vol = log_returns.expanding(min_periods=1).std(ddof=0) * np.sqrt(config.TRADING_DAYS)
+    expanding_vol = expanding_vol.where(np.isfinite(expanding_vol) & (expanding_vol >= 0))
 
-    return hist_vol.bfill().ffill()
+    combined = hist_vol.combine_first(expanding_vol)
+    return combined.ffill().fillna(config.DEFAULT_INITIAL_VOL).astype(float)
 
 
 def run_backtest(ticker=None, start=None, end=None,
@@ -80,14 +85,14 @@ def run_backtest(ticker=None, start=None, end=None,
 
             # Sell new call
             K = S * (1 + strike_offset)
-            T = expiry_days / config.TRADING_DAYS
+            T = trading_days_to_year_fraction(expiry_days)
             premium = bs_call_price(S, K, T, config.RISK_FREE_RATE, sigma)
             cash += premium
             current_strike = K
             days_to_expiry = expiry_days
             roll_dates.append(dates[i])
 
-        remaining_T = days_to_expiry / config.TRADING_DAYS
+        remaining_T = trading_days_to_year_fraction(days_to_expiry)
         call_value = bs_call_price(S, current_strike, remaining_T, config.RISK_FREE_RATE, sigma)
 
         days_to_expiry -= 1

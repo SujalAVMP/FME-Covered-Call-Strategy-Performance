@@ -1,9 +1,8 @@
-"""Validate Black-Scholes pricing against current NSE option chain market prices.
+"""Compare Black-Scholes prices to a live option chain when supported.
 
-We cannot get historical option prices from yfinance, but we CAN fetch the
-current option chain. This module compares BS theoretical prices to current
-listed market prices for near-the-money calls — a small but credible defense
-of using BS in the backtest.
+This is only a snapshot diagnostic. It does not validate the historical
+backtest, and it depends on the upstream data provider exposing a live option
+chain for the requested ticker.
 """
 
 import numpy as np
@@ -13,10 +12,11 @@ from . import config
 from .black_scholes import bs_call_price
 from .data_fetcher import (compute_historical_volatility, get_available_expiries,
                             get_option_chain, get_stock_data)
+from .option_time import business_days_to_expiry, trading_days_to_year_fraction
 
 
-def validate_bs_against_market(ticker=None, vol_window=None, moneyness_band=0.10):
-    """Compare BS prices to market prices for the nearest monthly expiry.
+def validate_bs_against_market(ticker=None, vol_window=None, moneyness_band=0.10, today=None):
+    """Compare BS prices to market prices for the nearest supported expiry.
 
     Returns a DataFrame with columns:
         strike, market_price, bs_price, abs_error, pct_error, days_to_expiry
@@ -27,10 +27,13 @@ def validate_bs_against_market(ticker=None, vol_window=None, moneyness_band=0.10
 
     expiries = get_available_expiries(ticker)
     if not expiries:
-        raise RuntimeError(f"No option expiries available for {ticker}")
+        raise RuntimeError(
+            f"No option expiries available for {ticker}; "
+            "the current data provider may not expose live option chains for this symbol."
+        )
 
     # Pick the first expiry that's at least 7 days out
-    today = pd.Timestamp.now().normalize()
+    today = pd.Timestamp.now().normalize() if today is None else pd.Timestamp(today).normalize()
     chosen_expiry = None
     for exp in expiries:
         exp_ts = pd.Timestamp(exp)
@@ -42,7 +45,10 @@ def validate_bs_against_market(ticker=None, vol_window=None, moneyness_band=0.10
 
     calls, _ = get_option_chain(ticker, chosen_expiry)
     if calls is None or calls.empty:
-        raise RuntimeError(f"Empty option chain for {ticker} {chosen_expiry}")
+        raise RuntimeError(
+            f"Empty option chain for {ticker} {chosen_expiry}; "
+            "live market validation is unavailable for this symbol right now."
+        )
 
     # Spot price + realized vol from recent history
     end_date = today.strftime("%Y-%m-%d")
@@ -56,9 +62,9 @@ def validate_bs_against_market(ticker=None, vol_window=None, moneyness_band=0.10
     if not np.isfinite(sigma) or sigma <= 0:
         sigma = 0.20  # fallback
 
-    # Time to expiry in trading-day fraction of a year
-    days_to_expiry = max((pd.Timestamp(chosen_expiry) - today).days, 1)
-    T = days_to_expiry / 365.0  # calendar-day convention for live option pricing
+    # Use the same trading-day year fraction convention as the backtest.
+    days_to_expiry = business_days_to_expiry(today, chosen_expiry)
+    T = trading_days_to_year_fraction(days_to_expiry)
 
     # Filter to within ±moneyness_band of spot
     lower = spot * (1 - moneyness_band)

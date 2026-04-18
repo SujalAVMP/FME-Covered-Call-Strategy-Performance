@@ -9,6 +9,7 @@ import pandas as pd
 from . import config
 from .black_scholes import bs_call_price
 from .monte_carlo import simulate_gbm_paths, covered_call_mc_returns, stock_only_mc_returns
+from .option_time import trading_days_to_year_fraction
 
 
 def _annualized_sharpe(returns, r, days):
@@ -21,21 +22,23 @@ def _annualized_sharpe(returns, r, days):
     if std <= 0:
         return 0.0
 
-    horizon_rf = (1 + r) ** (days / config.TRADING_DAYS) - 1
-    return ((returns.mean() - horizon_rf) / std) * np.sqrt(config.TRADING_DAYS / days)
+    T = trading_days_to_year_fraction(days)
+    horizon_rf = (1 + r) ** T - 1
+    return ((returns.mean() - horizon_rf) / std) * np.sqrt(1 / T)
 
 
-def strike_sensitivity(S_0, sigma, r=None, mu=None, expiry_days=30, strike_offsets=None, num_paths=5000):
+def strike_sensitivity(S_0, sigma, r=None, mu=None, expiry_days=None, strike_offsets=None, num_paths=5000):
     """
     For a fixed expiry, sweep strike prices from ITM to OTM.
     Returns a DataFrame with premium, max profit, breakeven, and MC-based stats.
     """
     r = config.RISK_FREE_RATE if r is None else r
     mu = r if mu is None else mu
+    expiry_days = config.DEFAULT_EXPIRY_DAYS if expiry_days is None else expiry_days
     if strike_offsets is None:
         strike_offsets = config.STRIKE_OFFSETS
 
-    T = expiry_days / config.TRADING_DAYS
+    T = trading_days_to_year_fraction(expiry_days)
     paths = simulate_gbm_paths(S_0, mu, sigma, T, num_steps=expiry_days, num_paths=num_paths)
 
     rows = []
@@ -73,7 +76,7 @@ def expiry_sensitivity(S_0, sigma, r=None, mu=None, strike_offset=0.05, expiry_r
 
     rows = []
     for days in expiry_range:
-        T = days / config.TRADING_DAYS
+        T = trading_days_to_year_fraction(days)
         K = S_0 * (1 + strike_offset)
         premium = bs_call_price(S_0, K, T, r, sigma)
 
@@ -113,7 +116,7 @@ def moneyness_expiry_heatmap(S_0, sigma, r=None, mu=None, strike_offsets=None, e
 
     for i, offset in enumerate(strike_offsets):
         for j, days in enumerate(expiry_range):
-            T = days / config.TRADING_DAYS
+            T = trading_days_to_year_fraction(days)
             K = S_0 * (1 + offset)
             premium = bs_call_price(S_0, K, T, r, sigma)
             paths = simulate_gbm_paths(S_0, mu, sigma, T, num_steps=days, num_paths=num_paths, seed=42+i*10+j)

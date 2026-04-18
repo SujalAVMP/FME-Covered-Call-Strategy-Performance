@@ -24,8 +24,9 @@ BACKTEST_END = "2025-12-31"
 
 # Rolling covered call parameters
 DEFAULT_STRIKE_OFFSET = 0.05   # 5% OTM by default
-DEFAULT_EXPIRY_DAYS = 30       # Monthly rolls
+DEFAULT_EXPIRY_DAYS = 21       # Approx. one trading month
 DEFAULT_VOL_WINDOW = 30        # 30-day rolling historical vol
+DEFAULT_INITIAL_VOL = 0.20     # Used only before enough history exists
 
 # Monte Carlo settings
 MC_NUM_PATHS = 10_000

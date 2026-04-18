@@ -7,7 +7,7 @@ SECTOR_UNIVERSE = {
     "Banking":  ["HDFCBANK.NS", "ICICIBANK.NS", "SBIN.NS"],
     "FMCG":     ["HINDUNILVR.NS", "ITC.NS"],
     "Pharma":   ["SUNPHARMA.NS", "DRREDDY.NS"],
-    "Auto":     ["MARUTI.NS", "TATAMOTORS.NS"],
+    "Auto":     ["MARUTI.NS", "M&M.NS"],
     "Metals":   ["TATASTEEL.NS", "HINDALCO.NS"],
 }
 

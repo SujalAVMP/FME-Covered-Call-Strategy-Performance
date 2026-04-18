@@ -40,3 +40,28 @@ def test_compute_beta_handles_short_series():
     result = beta_analysis.compute_beta(stock_prices, bench_prices)
     assert np.isnan(result["beta"])
     assert result["n_obs"] == 2
+
+
+def test_compute_beta_alpha_uses_risk_free_rate():
+    rf = 0.07
+    rf_daily_log = np.log((1 + rf) ** (1 / 252))
+    n = 400
+    idx = _date_index(n)
+
+    benchmark_excess = np.linspace(-0.01, 0.01, n)
+    true_alpha_daily = 0.0001
+    stock_excess = true_alpha_daily + 1.2 * benchmark_excess
+
+    benchmark_prices = pd.Series(
+        100 * np.exp(np.cumsum(benchmark_excess + rf_daily_log)),
+        index=idx,
+    )
+    stock_prices = pd.Series(
+        100 * np.exp(np.cumsum(stock_excess + rf_daily_log)),
+        index=idx,
+    )
+
+    result = beta_analysis.compute_beta(stock_prices, benchmark_prices, rf=rf)
+
+    assert abs(result["beta"] - 1.2) < 1e-6
+    assert abs(result["alpha_jensen"] - true_alpha_daily * 252) < 1e-6

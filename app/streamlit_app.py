@@ -68,15 +68,20 @@ else:
     st.sidebar.caption(f"Using ticker: `{ticker}`")
 
 start_date = st.sidebar.date_input("Backtest Start",
-                                    value=datetime.date(2020, 1, 1))
+                                    value=datetime.date.fromisoformat(config.BACKTEST_START))
 end_date = st.sidebar.date_input("Backtest End",
-                                  value=datetime.date(2025, 12, 31))
+                                  value=datetime.date.fromisoformat(config.BACKTEST_END))
 
 strike_type = st.sidebar.selectbox("Strike Price", ["ATM", "2% OTM", "5% OTM", "10% OTM", "5% ITM"])
 strike_map = {"5% ITM": -0.05, "ATM": 0.0, "2% OTM": 0.02, "5% OTM": 0.05, "10% OTM": 0.10}
 strike_offset = strike_map[strike_type]
 
-expiry_days = st.sidebar.slider("Days to Expiry (per roll)", 7, 90, 30)
+expiry_days = st.sidebar.slider(
+    "Days to Expiry (per roll)",
+    7,
+    90,
+    config.DEFAULT_EXPIRY_DAYS,
+)
 mc_paths = st.sidebar.slider("Monte Carlo Paths", 1000, 20000, 5000, step=1000)
 
 run = st.sidebar.button("Run Analysis", type="primary")
@@ -326,7 +331,7 @@ with tab5:
 
         # Combine alpha + beta tables
         combined = alpha_table.merge(
-            beta_table[["ticker", "beta", "alpha_capm", "r_squared"]],
+            beta_table[["ticker", "beta", "alpha_jensen", "r_squared"]],
             on="ticker", how="left"
         )
 
@@ -390,9 +395,9 @@ with tab5:
         # ── BS validation ──
         with st.expander("Black-Scholes pricing validation (current option chain)", expanded=False):
             st.caption(
-                "Compares BS theoretical prices against the current NSE option chain "
-                "for the selected single-ticker (top of sidebar). yfinance does not provide "
-                "historical option prices, so this is a snapshot validation only."
+                "Compares BS theoretical prices against a live option chain for the selected "
+                "ticker when the upstream data provider exposes one. This is only a snapshot "
+                "diagnostic and does not validate the historical backtest."
             )
             try:
                 with st.spinner(f"Fetching current option chain for {ticker}..."):

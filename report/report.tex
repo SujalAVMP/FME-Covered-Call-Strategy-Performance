@@ -44,7 +44,7 @@
 \thispagestyle{empty}
 
 \begin{abstract}
-A covered call strategy involves holding a long position in a stock while simultaneously selling a call option on the same stock. This report investigates the performance of this strategy using historical data for Reliance Industries (RELIANCE.NS), Monte Carlo simulations, and sensitivity analysis. We compare the covered call with a simple buy-and-hold approach across multiple risk-adjusted metrics including the Sharpe ratio, maximum drawdown, and Value-at-Risk. In our marked-to-market backtest, the covered call lowers annualized volatility from 28.27\% to 26.08\% and improves maximum drawdown from -44.08\% to -39.93\%, while reducing annualized return from 15.39\% to 10.46\% because upside beyond the strike is surrendered.
+A covered call strategy involves holding a long position in a stock while simultaneously selling a call option on the same stock. This report investigates the performance of this strategy using historical data for Reliance Industries (RELIANCE.NS), Monte Carlo simulations, and sensitivity analysis. We compare the covered call with a simple buy-and-hold approach across multiple risk-adjusted metrics including the Sharpe ratio, maximum drawdown, and Value-at-Risk. In our marked-to-market backtest with approximately monthly 21-trading-day rolls, the covered call lowers annualized volatility from 28.27\% to 24.83\% and improves maximum drawdown from -44.08\% to -40.56\%, while reducing annualized return from 15.39\% to 11.54\% because upside beyond the strike is surrendered.
 \end{abstract}
 
 \tableofcontents
@@ -164,14 +164,14 @@ Since this project does not use a directly sourced historical option-price datas
 \begin{equation}
     \hat{\sigma}_t = \text{std}\!\left(\ln\frac{S_i}{S_{i-1}}\right)_{i=t-29}^{t} \times \sqrt{252}
 \end{equation}
-We assume a constant annual risk-free rate of $r = 7\%$ throughout the analysis. \textbf{This is an important assumption}: actual market premiums may differ from the BS theoretical value due to supply-demand dynamics, changing interest rates, and the volatility smile.
+Before the rolling 30-day window is fully available at the start of the sample, we use an expanding realized-volatility estimate based only on returns observed up to that date, plus a fixed initial fallback on the first observation(s). This avoids using future information to initialize the backtest. We assume a constant annual risk-free rate of $r = 7\%$ throughout the analysis. \textbf{This is an important assumption}: actual market premiums may differ from the BS theoretical value due to supply-demand dynamics, changing interest rates, and the volatility smile.
 
 \subsection{Backtesting Procedure}
 
 We implement a \textbf{rolling covered call} strategy:
 \begin{enumerate}
     \item On day 0, buy the stock at price $S_0$.
-    \item Simultaneously sell a call with strike $K = S_0 \times (1 + \delta)$ expiring in 30 trading days, where $\delta$ is the strike offset (e.g., $+5\%$ for OTM).
+    \item Simultaneously sell a call with strike $K = S_0 \times (1 + \delta)$ expiring in 21 trading days, where $\delta$ is the strike offset (e.g., $+5\%$ for OTM). This is our approximation to a one-month roll.
     \item At each expiry:
     \begin{itemize}
         \item If $S_T > K$: the call is exercised. The stock is ``called away'' at $K$. Re-purchase at market price and sell a new call.
@@ -317,6 +317,49 @@ The covered call tends to outperform buy-and-hold in:
     \item \textbf{Mildly declining markets}: The premium cushion reduces losses compared to holding the stock outright.
 \end{itemize}
 
+To move beyond these qualitative claims, we extend the single-ticker analysis with a cross-sectional study across 16 large-cap NSE stocks spanning 7 sectors (Energy, IT, Banking, FMCG, Pharma, Auto, Metals). For each stock we run the same rolling covered-call backtest and define the strategy's return spread as
+\[
+\alpha_{CC} = R_{CC} - R_{\text{stock-only}}
+\]
+the difference between the covered-call total return and the buy-and-hold total return over the same window. We use the symbol $\alpha_{CC}$ for brevity, but note that this is a raw return spread and not a risk-adjusted alpha in the CAPM sense.
+
+\subsubsection{Beta and the Covered Call Alpha}
+
+Each stock's beta with respect to the Nifty 50 is estimated by an OLS regression of daily log returns. Figure~\ref{fig:beta_vs_alpha} plots $\alpha_{CC}$ against beta. The slope of the OLS line tells us whether covered-call performance has a systematic relationship with market sensitivity. The sign of this relationship is not obvious a priori: high-beta stocks surrender more upside when rallies break through the strike, but they also command higher implied volatility and therefore larger premiums on each roll. Which effect dominates is an empirical question, and the universe here is deliberately narrow (16 large-cap constituents with betas clustered in a relatively tight range), so the fitted slope should be read as indicative rather than definitive.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.85\textwidth]{output/figures/beta_vs_alpha.png}
+    \caption{Beta (vs Nifty 50) plotted against covered-call alpha across 16 NSE large-caps. Each point is one stock, colored by sector.}
+    \label{fig:beta_vs_alpha}
+\end{figure}
+
+\subsubsection{Sector Decomposition}
+
+Figure~\ref{fig:sector_year_heatmap} breaks the cross-section down by sector and calendar year. The cells encode mean $\alpha_{CC}$ within each (sector, year) bucket — green cells are years/sectors where the covered call beat stock-only, red cells are where it lost.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.95\textwidth]{output/figures/sector_tenure_heatmap_year.png}
+    \caption{Mean covered-call alpha by sector and calendar year.}
+    \label{fig:sector_year_heatmap}
+\end{figure}
+
+\subsubsection{Market Regime Dependence}
+
+We further classify each calendar year as Bull, Sideways, or Bear based on the Nifty 50's annual return (Bull: $> +12\%$, Bear: $< -5\%$, Sideways: in between). Figure~\ref{fig:alpha_regime} aggregates $\alpha_{CC}$ by regime across all 16 stocks. This is the most direct test of the conventional claim that covered calls win in sideways markets and underperform in bull runs.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.75\textwidth]{output/figures/alpha_by_regime.png}
+    \caption{Mean covered-call alpha by market regime, with one standard deviation across stocks shown as error bars.}
+    \label{fig:alpha_regime}
+\end{figure}
+
+\subsubsection{Black-Scholes Pricing}
+
+Because we cannot obtain historical NSE option-chain data through public APIs, the backtest prices each call leg with Black-Scholes using realised 30-day volatility. This makes $\alpha_{CC}$ explicitly model-dependent: the stock-only benchmark does \emph{not} use the option-pricing model, so any systematic mispricing of call premiums feeds directly into the covered-call leg rather than cancelling out. The codebase includes a live snapshot comparison against current listed option prices when the data provider exposes an option chain, but \texttt{yfinance} does not currently return live NSE single-stock option chains for our default ticker, so this diagnostic remains unavailable in practice.
+
 \subsection{When Does It Underperform?}
 
 \begin{itemize}
@@ -356,6 +399,8 @@ While the covered call \emph{caps the upside} and provides income, the protectiv
     \item \textbf{No transaction costs}: We do not model brokerage, bid-ask spreads, or slippage, which would erode returns especially with frequent rolling.
     \item \textbf{European option assumption}: The analysis models European-style calls, which matches the contract style used for NSE stock options; however, the BS model still assumes constant volatility and log-normal returns.
     \item \textbf{Dividend treatment}: The stock-price history is dividend-adjusted, but we do not include an explicit dividend yield in Black-Scholes pricing or separate dividend cash flows in the strategy.
+    \item \textbf{Cross-sectional universe}: The multi-ticker analysis is limited to liquid Nifty large-caps with listed options. Results may not generalise to small-caps or stocks without an active options market.
+    \item \textbf{No market-price validation of BS premiums}: \texttt{yfinance} does not currently serve live NSE single-stock option chains for our default ticker, so we could not benchmark our theoretical call prices against listed market prices. The BS premiums used in the backtest are therefore unvalidated in absolute terms, and the covered-call leg remains model-dependent.
 \end{enumerate}
 
 
@@ -365,14 +410,46 @@ While the covered call \emph{caps the upside} and provides income, the protectiv
 
 The covered call strategy systematically exchanges upside potential for immediate premium income and reduced portfolio volatility. Our analysis using historical backtesting, Monte Carlo simulation, and sensitivity analysis on Reliance Industries confirms that:
 \begin{itemize}
-    \item The strategy lowers annualized volatility from 28.27\% to 26.08\% and improves maximum drawdown from -44.08\% to -39.93\% versus buy-and-hold.
-    \item The price of that risk reduction is lower annualized return: 10.46\% for the covered call versus 15.39\% for the stock-only benchmark.
+    \item The strategy lowers annualized volatility from 28.27\% to 24.83\% and improves maximum drawdown from -44.08\% to -40.56\% versus buy-and-hold.
+    \item The price of that risk reduction is lower annualized return: 11.54\% for the covered call versus 15.39\% for the stock-only benchmark.
     \item The covered call is not a ``free lunch'' — it underperforms in strong rallies and provides only limited protection in crashes.
     \item It is best suited for mildly bullish or neutral investors seeking income generation.
 \end{itemize}
 
 The accompanying Streamlit application allows users to explore the strategy with custom parameters and real-time data.
 
+
+% ══════════════════════════════════════════════════════
+\section*{Group Member Contributions}
+% ══════════════════════════════════════════════════════
+
+\begin{center}
+\small
+\begin{tabular}{p{3cm} p{7cm} p{3cm}}
+    \toprule
+    \textbf{Name} & \textbf{Contribution} & \textbf{Signature} \\
+    \midrule
+    Pradnyesh &
+        Option pricing module (\texttt{black\_scholes.py}), Greeks analysis, report §2.2--2.3, §4.5
+        & \\[2em]
+    Akshit &
+        Monte Carlo simulation (\texttt{monte\_carlo.py}), sensitivity analysis (\texttt{sensitivity.py}), report §3.4--3.5, §4.3--4.4
+        & \\[2em]
+    Pratik &
+        Historical backtest engine (\texttt{backtest.py}), risk metrics (\texttt{risk\_metrics.py}), report §3.3, §4.2
+        & \\[2em]
+    Rahul &
+        Cross-sectional extension (\texttt{beta\_analysis.py}, \texttt{multi\_ticker\_backtest.py}, \texttt{tenure\_slicers.py}), report §5.1
+        & \\[2em]
+    Sujal &
+        Data pipeline (\texttt{data\_fetcher.py}), Streamlit application, report §3.1--3.2, §5.2--5.4, integration and testing
+        & \\[2em]
+    \bottomrule
+\end{tabular}
+\end{center}
+
+\vspace{1.5em}
+\noindent\textit{All group members have reviewed the final report and agree with its contents.}
 
 % ══════════════════════════════════════════════════════
 \section*{References}

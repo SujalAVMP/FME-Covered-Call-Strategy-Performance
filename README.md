@@ -8,6 +8,8 @@ This project studies the performance of a rolling covered call strategy and comp
 - A Streamlit app for interactive exploration
 - A LaTeX report with generated figures and tables
 
+The default backtest uses approximately monthly 21-trading-day rolls, a 30-day realized-volatility estimate, and a fixed initial volatility fallback only before enough history exists to estimate realized volatility without look-ahead.
+
 ## Project Structure
 
 ```text
@@ -60,3 +62,5 @@ uv run python scripts/generate_report_assets.py
 ```
 
 This writes PNG figures to `output/figures/` and the performance table to `output/tables/performance_metrics.tex`.
+
+The Black-Scholes market-validation plot is generated only when the upstream data provider exposes a live option chain for the selected ticker.

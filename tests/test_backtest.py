@@ -62,4 +62,37 @@ def test_prepare_volatility_series_falls_back_when_window_is_too_short(monkeypat
     prepared = backtest.prepare_volatility_series(price_frame["Close"], window=30)
 
     assert prepared.notna().all()
-    assert (prepared > 0).all()
+    assert (prepared >= 0).all()
+
+
+def test_prepare_volatility_series_does_not_backfill_future_volatility(monkeypatch):
+    price_frame = _close_frame([100.0, 100.0, 100.0, 100.0])
+    sigma_series = pd.Series([np.nan, np.nan, 0.25, 0.30], index=price_frame.index)
+
+    monkeypatch.setattr(
+        backtest,
+        "compute_historical_volatility",
+        lambda prices, window=None: sigma_series,
+    )
+
+    prepared = backtest.prepare_volatility_series(price_frame["Close"], window=30)
+
+    assert prepared.iloc[0] != pytest.approx(0.25)
+    assert prepared.iloc[1] != pytest.approx(0.25)
+    assert prepared.iloc[2] == pytest.approx(0.25)
+    assert prepared.iloc[3] == pytest.approx(0.30)
+
+
+def test_prepare_volatility_series_preserves_zero_volatility(monkeypatch):
+    price_frame = _close_frame([100.0, 100.0, 100.0, 100.0])
+    sigma_series = pd.Series(0.0, index=price_frame.index)
+
+    monkeypatch.setattr(
+        backtest,
+        "compute_historical_volatility",
+        lambda prices, window=None: sigma_series,
+    )
+
+    prepared = backtest.prepare_volatility_series(price_frame["Close"], window=30)
+
+    assert (prepared == 0.0).all()
