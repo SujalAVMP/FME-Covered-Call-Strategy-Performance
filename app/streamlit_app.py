@@ -331,7 +331,7 @@ with tab5:
 
         # Combine alpha + beta tables
         combined = alpha_table.merge(
-            beta_table[["ticker", "beta", "alpha_jensen", "r_squared"]],
+            beta_table[["ticker", "beta", "r_squared"]],
             on="ticker", how="left"
         )
 
