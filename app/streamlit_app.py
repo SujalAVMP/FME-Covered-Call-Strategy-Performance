@@ -200,13 +200,13 @@ with tab3:
     ) / S_0
 
     with col1:
-        fig_fan_stock = plotly_mc_fan(stock_equity_paths, title="Stock-Only Equity Paths")
-        st.plotly_chart(fig_fan_stock, use_container_width=True)
-
-    with col2:
         fig_fan_cc = plotly_mc_fan(cc_equity_paths, title="Covered Call Equity Paths")
         st.plotly_chart(fig_fan_cc, use_container_width=True)
 
+    with col2:
+        fig_fan_stock = plotly_mc_fan(stock_equity_paths, title="Stock-Only Equity Paths")
+        st.plotly_chart(fig_fan_stock, use_container_width=True)
+    
     # probability of CC outperforming
     prob_win = np.mean(cc_mc_rets > stock_mc_rets)
     st.metric("Probability Covered Call Outperforms Stock", f"{prob_win:.1%}")
