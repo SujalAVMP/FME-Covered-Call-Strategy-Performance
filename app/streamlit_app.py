@@ -352,10 +352,6 @@ with tab5:
 
         # ── Beta vs Alpha scatter ──
         st.subheader("Beta vs Covered Call Alpha")
-        st.caption(
-            "The headline chart for the professor's question. A negative slope means "
-            "low-beta stocks favor the covered call (premium income dominates capped upside)."
-        )
         fig_ba = plotly_beta_vs_alpha(combined)
         st.plotly_chart(fig_ba, use_container_width=True)
 
