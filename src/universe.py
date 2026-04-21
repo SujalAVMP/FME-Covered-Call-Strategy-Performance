@@ -9,6 +9,7 @@ SECTOR_UNIVERSE = {
     "Pharma":   ["SUNPHARMA.NS", "DRREDDY.NS"],
     "Auto":     ["MARUTI.NS", "M&M.NS"],
     "Metals":   ["TATASTEEL.NS", "HINDALCO.NS"],
+    "US Stocks": ["AAPL", "MSFT", "GOOGL", "AMZN", "META"]
 }
 
 # Benchmark for beta calculations
