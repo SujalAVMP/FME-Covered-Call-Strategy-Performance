@@ -77,7 +77,7 @@ strike_map = {"5% ITM": -0.05, "ATM": 0.0, "2% OTM": 0.02, "5% OTM": 0.05, "10% 
 strike_offset = strike_map[strike_type]
 
 expiry_days = st.sidebar.slider(
-    "Days to Expiry (per roll)",
+    "Trading Days to Expiry (per roll)",
     7,
     90,
     config.DEFAULT_EXPIRY_DAYS,
